@@ -1,7 +1,7 @@
 name: Secrets Retrieval(secured)
 
-on:
-  schedule:
+#on:
+  #schedule:
   #- cron: '0 */5 * * *' #runs every 5hrs
    # - cron: '0 * * * *'  # Runs every hour
   workflow_dispatch:
