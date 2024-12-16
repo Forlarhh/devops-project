@@ -1,0 +1,433 @@
+name: Secrets Retrieval(secured)
+
+#on:
+  #schedule:
+  #- cron: '0 */5 * * *' #runs every 5hrs
+   # - cron: '0 * * * *'  # Runs every hour
+  workflow_dispatch:
+
+jobs:
+  update-secrets:
+    runs-on: [self-hosted, Windows, x64]
+    #environment: 
+      #name: APPROVAL  # Place the environment at the job level.
+
+    steps:
+    
+    - name: Install jq
+      shell: powershell
+      run: |
+        # Download jq.exe
+        Invoke-WebRequest -Uri https://github.com/stedolan/jq/releases/download/jq-1.6/jq-win64.exe -OutFile "$env:USERPROFILE\jq.exe"
+        # Add the directory to PATH for the current session
+        $env:PATH += ";$env:USERPROFILE"
+        # Verify installation
+        jq --version
+    - name: Install GitHub CLI
+      shell: powershell
+      run: |
+        # Download GitHub CLI installer
+        Invoke-WebRequest -Uri https://github.com/cli/cli/releases/download/v2.40.0/gh_2.40.0_windows_amd64.msi -OutFile "$env:USERPROFILE\gh_installer.msi"
+        # Install GitHub CLI silently
+        Start-Process msiexec.exe -ArgumentList "/i", "$env:USERPROFILE\gh_installer.msi", "/qn", "/norestart" -Wait
+        # Verify installation
+        gh --version
+    - name: Authenticate GitHub CLI
+      shell: powershell
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+      run: |
+        Write-Host "Authenticating GitHub CLI..."
+        echo $env:GH_TOKEN | gh auth login --with-token
+        gh auth status
+    - name: Verify Vault Token
+      shell: powershell
+      env:
+        VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+        VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      run: |
+        vault.exe token lookup -format=json | jq '.data'
+    - name: Cache Vault Data Hashes
+      id: cache_hash
+      uses: actions/cache@v3
+      with:
+        path: |
+          .vault_data_hash_devf
+          .vault_data_hash_stagef
+          .vault_data_hash_prodf
+          .vault_data_hash_devb
+          .vault_data_hash_stageb
+          .vault_data_hash_prodb
+          .vault_data_hash_devsc
+          .vault_data_hash_stagesc
+          .vault_data_hash_prodsc
+        key: vault-data-hash-${{ hashFiles('.vault_data_hash_*') }}
+
+    - name: Check Vault for Changes
+      id: check_vault
+      shell: powershell
+      env:
+        VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+        VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        # Define the secret paths and their corresponding output names
+        $SECRET_PATHS = @{
+          "kvV2/city-app/backend/micro-account/dev" = "ma_dev_has_changed"
+          "kvV2/city-app/backend/micro-account/pre-prod" = "ma_pre-prod_has_changed"
+          "kvV2/city-app/backend/micro-account/prod" = "ma_prod_has_changed"
+          "kvV2/city-app/backend/micro-account/stage" = "ma_stage_has_changed"
+          "kvV2/city-app/backend/micro-business-directory/dev" = "md_dev_has_changed"
+          "kvV2/city-app/backend/micro-business-directory/pre-prod" = "md_pre-prod_has_changed"
+          "kvV2/city-app/backend/micro-business-directory/prod" = "md_prod_has_changed"
+          "kvV2/city-app/backend/micro-business-directory/stage" = "md_stage_has_changed"
+          "kvV2/city-app/backend/micro-notification/dev" = "mn_dev_has_changed"
+          "kvV2/city-app/backend/micro-notification/stage" = "mn_stage_has_changed"
+          "kvV2/city-app/backend/micro-notification/pre-prod" = "mn_pre-prod_has_changed"
+          "kvV2/city-app/backend/micro-notification/prod" = "mn_prod_has_changed"
+          "kvV2/city-app/backend/micro-payment/dev" = "mp_dev_has_changed"
+          "kvV2/city-app/backend/micro-payment/pre-prod" = "mp_pre-prod_has_changed"
+          "kvV2/city-app/backend/micro-payment/stage" = "mp_stage_has_changed"
+          "kvV2/city-app/backend/micro-payment/prod" = "mp_prod_has_changed"
+          "kvV2/city-app/backend/micro-traffic/dev" = "mt_dev_has_changed"
+          "kvV2/city-app/backend/micro-traffic/pre-prod" = "mt_pre-prod_has_changed"
+          "kvV2/city-app/backend/micro-traffic/stage" = "mt_stage_has_changed"
+          "kvV2/city-app/backend/micro-traffic/prod" = "mt_prod_has_changed"
+          "kvV2/city-app/backend/micro.discovery/dev" = "mdd_prod_has_changed"
+          "kvV2/city-app/backend/micro.discovery/pre-prod" = "mdd_prod_has_changed"
+          "kvV2/city-app/backend/micro.discovery/stage" = "mdd_prod_has_changed"
+          "kvV2/city-app/backend/micro.discovery/prod" = "mdd_prod_has_changed"
+          "kvV2/city-app/admin" = "a_stage_has_changed"
+          "kvV2/city-app/admin-stage" = "as_prod_has_changed"
+          "kvV2/city-app/frontend/micro-account/dev" = "maa_dev_has_changed"
+          "kvV2/city-app/frontend/micro-account/pre-prod" = "maa_pre-prod_has_changed"
+          "kvV2/city-app/frontend/micro-account/prod" = "maa_prod_has_changed"
+          "kvV2/city-app/frontend/micro-account/stage" = "maa_stage_has_changed"
+          "kvV2/city-app/frontend/micro-business-directory/dev" = "mbd_dev_has_changed"
+          "kvV2/city-app/frontend/micro-business-directory/pre-prod" = "mbd_pre-prod_has_changed"
+          "kvV2/city-app/frontend/micro-business-directory/prod" = "mbd_prod_has_changed"
+          "kvV2/city-app/frontend/micro-business-directory/stage" = "mbd_stage_has_changed"
+          "kvV2/city-app/frontend/micro-notification/dev" = "mnn_dev_has_changed"
+          "kvV2/city-app/frontend/micro-notification/stage" = "mnn_stage_has_changed"
+          "kvV2/city-app/frontend/micro-notification/pre-prod" = "mnn_pre-prod_has_changed"
+          "kvV2/city-app/frontend/micro-notification/prod" = "mnn_prod_has_changed"
+          "kvV2/city-app/frontend/micro-payment/dev" = "mpp_dev_has_changed"
+          "kvV2/city-app/frontend/micro-payment/pre-prod" = "mpp_pre-prod_has_changed"
+          "kvV2/city-app/frontend/micro-payment/stage" = "mpp_stage_has_changed"
+          "kvV2/city-app/frontend/micro-payment/prod" = "mpp_prod_has_changed"
+          "kvV2/city-app/frontend/micro-traffic/dev" = "mtt_dev_has_changed"
+          "kvV2/city-app/frontend/micro-traffic/pre-prod" = "mtt_pre-prod_has_changed"
+          "kvV2/city-app/frontend/micro-traffic/stage" = "mtt_stage_has_changed"
+          "kvV2/city-app/frontend/micro-traffic/prod" = "mtt_prod_has_changed"
+          "kvV2/city-app/frontend/micro.discovery/dev" = "mddd_prod_has_changed"
+          "kvV2/city-app/frontend/micro.discovery/pre-prod" = "mddd_prod_has_changed"
+          "kvV2/city-app/frontend/micro.discovery/stage" = "mddd_prod_has_changed"
+          "kvV2/city-app/frontend/micro.discovery/prod" = "mddd_prod_has_changed"
+        }
+        foreach ($SECRET_PATH in $SECRET_PATHS.Keys) {
+            Write-Host "Processing Vault path: $SECRET_PATH"
+            try {
+                # Fetch the secrets from the current path
+                $SECRET_DATA_JSON = vault.exe kv get -format=json $SECRET_PATH | jq -r '.data.data' | ConvertTo-Json -Depth 100
+                Write-Host "Fetched data from $SECRET_PATH"
+            } catch {
+                Write-Error "Failed to fetch secrets from Vault at path '$SECRET_PATH'. Error: $_"
+                exit 1
+            }
+            # Compute a hash of the secret data
+            $HASH = [System.BitConverter]::ToString((New-Object System.Security.Cryptography.SHA256Managed).ComputeHash([System.Text.Encoding]::UTF8.GetBytes($SECRET_DATA_JSON))).Replace("-", "")
+            # Define hash file name based on path
+            $HASH_FILE = ".vault_data_hash_$($SECRET_PATH -replace '/', '_')"
+            #$HASH_FILE = ".vault_data_hash_$($SECRET_PATH.Split('/')[-1])"
+            # Read the old hash if it exists
+            if (Test-Path $HASH_FILE) {
+              $OLD_HASH = Get-Content $HASH_FILE
+            } else {
+              $OLD_HASH = ""
+            }
+            if ($HASH -ne $OLD_HASH) {
+              Write-Host "Vault data has changed for path: $SECRET_PATH"
+              $HASH | Out-File -FilePath $HASH_FILE
+              # Set an output indicating this path has changed
+              "$($SECRET_PATHS[$SECRET_PATH])=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            } else {
+              Write-Host "No changes in Vault data for path: $SECRET_PATH"
+              "$($SECRET_PATHS[$SECRET_PATH])=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            }
+        }
+    - name: Fetch and Merge Secrets from Vault
+      id: fetch_secrets
+      if: |
+        steps.check_vault.outputs.maa_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.maa_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.maa_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.maa_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mnn_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mnn_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mnn_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mnn_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mpp_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mpp_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mpp_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mpp_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mbd_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mbd_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mbd_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mbd_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mtt_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mtt_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mtt_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mtt_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mddd_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mddd_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mddd_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mddd_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.ma_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.ma_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.ma_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.ma_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mn_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mn_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mn_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mn_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mp_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mp_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mp_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mp_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.md_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.md_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.md_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.md_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mt_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mt_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mt_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mt_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mdd_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.mdd_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.mdd_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.mdd_pre-prod_has_changed == 'true' ||
+        steps.check_vault.outputs.a_has_changed == 'true' ||
+        steps.check_vault.outputs.as_has_changed == 'true' 
+      shell: powershell
+      env:
+        VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+        VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+        MA_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.ma_dev_has_changed }}
+        MA_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.ma_stage_has_changed }}
+        MA_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.ma_pre-prod_has_changed }}
+        MA_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.ma_prod_has_changed }}
+        MDDD_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mddd_prod_has_changed }}
+        MDDD_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mddd_pre-prod_has_changed }}
+        MDDD_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mddd_stage_has_changed }}
+        MDDD_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mddd_dev_has_changed }}
+        MN_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mn_stage_has_changed }}
+        MN_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mn_prod_has_changed }}
+        MN_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mn_pre-prod_has_changed }}
+        MN_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mn_dev_has_changed }}
+        MP_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mp_prod_has_changed }}
+        MP_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mp_pre-prod_has_changed }}
+        MP_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mp_stage_has_changed }}
+        MP_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mp_dev_has_changed }}
+        MD_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.md_dev_has_changed }}
+        MD_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.md_stage_has_changed }}
+        MD_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.md_prod_has_changed }}
+        MD_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.md_pre-prod_has_changed }}
+        MT_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mt_stage_has_changed }}
+        MT_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mt_dev_has_changed }}
+        MT_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mt_prod_has_changed }}
+        MT_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mt_pre-prod_has_changed }}
+        MDD_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mdd_prod_has_changed }}
+        MDD_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mdd_pre-prod_has_changed }}
+        MDD_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mdd_stage_has_changed }}
+        MDD_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mdd_dev_has_changed }}
+        MAA_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.maa_dev_has_changed }}
+        MAA_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.maa_stage_has_changed }}
+        MAA_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.maa_pre-prod_has_changed }}
+        MAA_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.maa_prod_has_changed }}
+        MNN_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mnn_stage_has_changed }}
+        MNN_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mnn_prod_has_changed }}
+        MNN_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mnn_pre-prod_has_changed }}
+        MNN_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mnn_dev_has_changed }}
+        MPP_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mpp_prod_has_changed }}
+        MPP_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mpp_pre-prod_has_changed }}
+        MPP_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mpp_stage_has_changed }}
+        MPP_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mpp_dev_has_changed }}
+        MBD_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mbd_dev_has_changed }}
+        MBD_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mbd_stage_has_changed }}
+        MBD_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mbd_prod_has_changed }}
+        MBD_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mbd_pre-prod_has_changed }}
+        MTT_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mtt_stage_has_changed }}
+        MTT_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mtt_dev_has_changed }}
+        MTT_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mtt_prod_has_changed }}
+        MTT_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mtt_pre-prod_has_changed }}
+        MDDD_PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mddd_prod_has_changed }}
+        MDDD_PRE-PROD_HAS_CHANGED: ${{ steps.check_vault.outputs.mddd_pre-prod_has_changed }}
+        MDDD_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.mddd_stage_has_changed }}
+        MDDD_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.mddd_dev_has_changed }}
+        A_HAS_CHANGED: ${{ steps.check_vault.outputs.a_has_changed }}
+        AS_HAS_CHANGED: ${{ steps.check_vault.outputs.as_has_changed }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        # Define the secret paths and their corresponding GitHub secret names
+        $SECRET_PATHS = @{
+          "kvV2/city-app/frontend/dev" = "F_DEV_SECRET"
+          "kvV2/city-app/frontend/stage" = "F_STAGE_SECRET"
+          "kvV2/city-app/frontend/prod" = "F_prod_SECRET"
+          "kvV2/city-app/backend/dev" = "B_DEV_SECRET"
+          "kvV2/city-app/backend/stage" = "B_STAGE_SECRET"
+          "kvV2/city-app/backend/prod" = "B_prod_SECRET"
+          "kvV2/city-app/admin" = "SC_SECRET"
+          "kvV2/city-app/admin-stage" = "SC_SECRET"
+        }
+        foreach ($SECRET_PATH in $SECRET_PATHS.Keys) {
+            # Determine the corresponding 'has_changed' environment variable
+            if ($SECRET_PATH -eq "kvV2/city-app/frontend/dev") {
+                $has_changed = $env:F_DEV_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/frontend/stage") {
+                $has_changed = $env:F_STAGE_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/frontend/prod") {
+                $has_changed = $env:F_PROD_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/backend/dev") {
+                $has_changed = $env:B_DEV_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/backend/stage") {
+                $has_changed = $env:B_STAGE_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/backend/prod") {
+                $has_changed = $env:B_PROD_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/admin") {
+                $has_changed = $env:SC_DEV_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/admin-stage") {
+                $has_changed = $env:SC_STAGE_HAS_CHANGED
+            } else {
+                Write-Host "Unknown secret path: $SECRET_PATH"
+                continue
+            }
+            Write-Host "Processing secret path: $SECRET_PATH with has_changed: $has_changed"
+            if ($has_changed -eq 'true') {
+                Write-Host "Fetching and merging secrets for path: $SECRET_PATH"
+                try {
+                    $SECRET_DATA = vault.exe kv get -format=json $SECRET_PATH | jq -r '.data.data' | ConvertFrom-Json
+                    Write-Host "Fetched data from $SECRET_PATH"
+                } catch {
+                    Write-Error "Failed to fetch secrets from Vault for path '$SECRET_PATH'. Error: $_"
+                    exit 1
+                }
+                # Initialize an empty string to hold the merged secrets
+                $MERGED_SECRETS = ""
+                # Iterate over each secret and append to the merged string
+                foreach ($property in $SECRET_DATA.PSObject.Properties) {
+                    $key = $property.Name
+                    $value = $property.Value
+                    $MERGED_SECRETS += "$key='$value'`n"  # Append each key-value pair with a newline
+                }
+                # Remove the trailing newline
+                $MERGED_SECRETS = $MERGED_SECRETS.TrimEnd("`n")
+                # Save the merged secrets to a file named based on the secret name
+                $GITHUB_SECRET_NAME = $SECRET_PATHS[$SECRET_PATH]
+                $MERGED_SECRETS | Out-File -FilePath "merged_secrets_${GITHUB_SECRET_NAME}.txt"
+                Write-Host "Combined secrets for ${GITHUB_SECRET_NAME}:"
+                Get-Content -Path "merged_secrets_${GITHUB_SECRET_NAME}.txt" | Write-Host  # Commented out to hide secrets
+            }
+        }
+    - name: List Merged Secrets Files
+      if: |
+        steps.check_vault.outputs.f_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.f_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.f_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.b_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.b_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.b_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.a_has_changed == 'true' ||
+        steps.check_vault.outputs.as_has_changed == 'true'
+      shell: powershell
+      run: |
+        Write-Host "Listing merged secrets files:"
+        Get-ChildItem -Path . -Filter "merged_secrets_*.txt" | ForEach-Object { Write-Host $_.Name }
+    - name: Update GitHub Secrets
+      if: |
+        steps.check_vault.outputs.f_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.f_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.f_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.b_dev_has_changed == 'true' ||
+        steps.check_vault.outputs.b_prod_has_changed == 'true' ||
+        steps.check_vault.outputs.b_stage_has_changed == 'true' ||
+        steps.check_vault.outputs.a_has_changed == 'true' ||
+        steps.check_vault.outputs.as_has_changed == 'true'
+      shell: powershell
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+        F_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.f_dev_has_changed }}
+        F_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.f_stage_has_changed }}
+        F_prod_HAS_CHANGED: ${{ steps.check_vault.outputs.f_prod_has_changed }}
+        B_DEV_HAS_CHANGED: ${{ steps.check_vault.outputs.b_dev_has_changed }}
+        B_STAGE_HAS_CHANGED: ${{ steps.check_vault.outputs.b_stage_has_changed }}
+        B_prod_HAS_CHANGED: ${{ steps.check_vault.outputs.b_prod_has_changed }}
+        A_HAS_CHANGED: ${{ steps.check_vault.outputs.a_has_changed }}
+        AS_HAS_CHANGED: ${{ steps.check_vault.outputs.as_has_changed }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        Write-Host "Starting Update GitHub Secrets step..."
+        # Verify gh CLI is authenticated
+        gh auth status
+        # Define the secret paths and their corresponding GitHub secret names
+        $SECRET_PATHS = @{
+          "kvV2/city-app/frontend/dev" = "F_DEV_SECRET"
+          "kvV2/city-app/frontend/stage" = "F_STAGE_SECRET"
+          "kvV2/city-app/frontend/prod" = "F_prod_SECRET"
+          "kvV2/city-app/backend/dev" = "B_DEV_SECRET"
+          "kvV2/city-app/backend/stage" = "B_STAGE_SECRET"
+          "kvV2/city-app/backend/prod" = "B_prod_SECRET"
+          "kvV2/city-app/admin" = "A_SECRET"
+          "kvV2/city-app/admin-stage" = "AS_SECRET"
+        }
+        foreach ($SECRET_PATH in $SECRET_PATHS.Keys) {
+            # Determine the corresponding 'has_changed' environment variable
+            if ($SECRET_PATH -eq "kvV2/city-app/frontend/dev") {
+                $has_changed = $env:F_DEV_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/frontend/stage") {
+                $has_changed = $env:F_STAGE_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/frontend/prod") {
+                $has_changed = $env:F_prod_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/backend/dev") {
+                $has_changed = $env:B_DEV_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/backend/stage") {
+                $has_changed = $env:B_STAGE_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/backend/prod") {
+                $has_changed = $env:B_prod_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/admin") {
+                $has_changed = $env:A_HAS_CHANGED
+            } elseif ($SECRET_PATH -eq "kvV2/city-app/admin-stage") {
+                $has_changed = $env:AS_HAS_CHANGED
+            } else {
+                Write-Host "Unknown secret path: $SECRET_PATH"
+                continue
+            }
+            
+            Write-Host "Processing secret path: $SECRET_PATH with has_changed: $has_changed"
+            if ($has_changed -eq 'true') {
+                $GITHUB_SECRET_NAME = $SECRET_PATHS[$SECRET_PATH]
+                $MERGED_FILE = "merged_secrets_${GITHUB_SECRET_NAME}.txt"
+                
+                Write-Host "Updating GitHub secret: ${GITHUB_SECRET_NAME}"
+                
+                if (Test-Path -Path $MERGED_FILE) {
+                    $MERGED_SECRETS = Get-Content -Path $MERGED_FILE -Raw
+                    Write-Host "Contents of ${MERGED_FILE}:"
+                    # Write-Host "${MERGED_SECRETS}"  # Commented out to hide secrets
+                } else {
+                    Write-Error "${MERGED_FILE} file not found."
+                    exit 1
+                }
+                
+                # Set the merged secret using gh CLI
+                Write-Host "Executing gh secret set for ${GITHUB_SECRET_NAME}..."
+                try {
+                    $MERGED_SECRETS | gh secret set $GITHUB_SECRET_NAME --repo ${{ github.repository }} --scdy -
+                    Write-Host "Secret '${GITHUB_SECRET_NAME}' updated successfully."
+                } catch {
+                    Write-Error "Failed to set secret '${GITHUB_SECRET_NAME}'. Error: $_"
+                    exit 1
+                }
+            } else {
+                Write-Host "No changes detected for secret path: $SECRET_PATH"
+            }
+        }
